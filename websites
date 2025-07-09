@@ -13,7 +13,10 @@ MONGO_URI = "mongodb+srv://mesohas358:mesohas358@cluster0.6kxy1vc.mongodb.net/mo
 BOT_TOKEN = "7931162174:AAGK8aSdqoYpZ4bsSXp36dp6zbVnYeenowA"
 TMDB_API_KEY = "7dc544d9253bccc3cfecc1c677f69819"
 ADMIN_CHANNEL_ID = "-1002853936940"
+BOT_USERNAME = "CTGVideoPlayerBot" # <-- আপনার বটের সঠিক ইউজারনেম
 # ======================================================================
+
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # --- অ্যাপ এবং ডাটাবেস সংযোগ ---
 app = Flask(__name__)
@@ -27,14 +30,13 @@ except Exception as e:
     print(f"FATAL: Could not connect to MongoDB. Error: {e}")
     movies_collection = None
 
-# --- HTML এবং CSS টেমপ্লেটগুলো ---
+# --- HTML এবং CSS টেমপ্লেট (সম্পূর্ণ কোড এখানে দেওয়া হলো) ---
 TEMPLATES = {
     "base": """
 <!doctype html>
 <html lang="bn">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="utf-8"> <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}অটো বাংলা মুভি{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -78,7 +80,7 @@ TEMPLATES = {
         </a>
     </div>
     {% else %}
-    <div class="col-12 text-center py-5"> <h4 class="text-white-50">এখনও কোনো মুভি আপলোড করা হয়নি।</h4> <p class="text-white-50">আপনার টেলিগ্রাম চ্যানেলে ফাইল আপলোড করুন।</p> </div>
+    <div class="col-12 text-center py-5"> <h4 class="text-white-50">এখনও কোনো মুভি আপলোড করা হয়নি।</h4> </div>
     {% endfor %}
 </div>
 {% endblock %}
@@ -102,12 +104,12 @@ TEMPLATES = {
                 <h5 class="mt-4 mb-3">কাহিনী সংক্ষেপ</h5>
                 <p class="card-text text-white-50">{{ movie.description or 'No description available.' }}</p>
                 <div class="mt-5">
-                    <h5 class="mb-3">ডাউনলোড লিঙ্ক</h5>
-                    <a href="{{ movie.download_url }}" class="btn btn-primary btn-lg" target="_blank">
-                        <i class="fa-solid fa-download me-2"></i> ডাউনলোড করুন
+                    <h5 class="mb-3">মুভিটি পেতে নিচের বাটনে ক্লিক করুন</h5>
+                    <a href="https://t.me/{{ bot_username }}?start=file_{{ movie._id }}" class="btn btn-primary btn-lg" target="_blank">
+                        <i class="fa-solid fa-robot me-2"></i> Get from Bot
                     </a>
                 </div>
-                <p class="text-muted small mt-3">এই লিঙ্কে ক্লিক করলে আপনাকে সরাসরি টেলিগ্রাম পোস্টে নিয়ে যাওয়া হবে।</p>
+                <p class="text-muted small mt-3">এই লিঙ্কে ক্লিক করলে আপনাকে সরাসরি টেলিগ্রাম বটে নিয়ে যাওয়া হবে এবং ফাইলটি পাঠিয়ে দেওয়া হবে।</p>
             </div>
         </div>
     </div>
@@ -144,9 +146,8 @@ class DictLoader(BaseLoader):
 jinja_env = Environment(loader=DictLoader(TEMPLATES))
 def render_template(template_name, **context):
     template = jinja_env.get_template(template_name)
-    return template.render(css_code=CSS_CODE, **context)
+    return template.render(css_code=CSS_CODE, bot_username=BOT_USERNAME, **context)
 
-# --- হেল্পার ফাংশন ---
 def parse_movie_name(filename):
     cleaned_name = filename.replace('.', ' ').replace('_', ' ')
     match = re.search(r'^(.*?)\s*\(?(\d{4})\)?', cleaned_name, re.IGNORECASE)
@@ -162,16 +163,10 @@ def get_tmdb_info(title, year):
         if res.get('results'):
             data = res['results'][0]
             poster = data.get('poster_path')
-            return {
-                'title': data.get('title'), 'description': data.get('overview'),
-                'poster_url': f"https://image.tmdb.org/t/p/w500{poster}" if poster else None,
-                'release_year': data.get('release_date', '')[:4],
-                'rating': round(data.get('vote_average', 0), 1)
-            }
-    except requests.exceptions.RequestException as e: print(f"Error: {e}")
+            return {'title': data.get('title'),'description': data.get('overview'),'poster_url': f"https://image.tmdb.org/t/p/w500{poster}" if poster else None,'release_year': data.get('release_date', '')[:4],'rating': round(data.get('vote_average', 0), 1)}
+    except requests.exceptions.RequestException as e: print(f"Error fetching TMDb info: {e}")
     return None
 
-# --- Flask রাউট ---
 @app.route('/')
 def index():
     if movies_collection is None: return "Database connection failed.", 500
@@ -189,32 +184,47 @@ def movie_detail(movie_id):
 
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
-    if movies_collection is None: return jsonify(status='failed', reason='db_error')
     data = request.get_json()
     if 'channel_post' in data:
         post = data['channel_post']
-        chat_id = str(post['chat']['id'])
-        if chat_id == ADMIN_CHANNEL_ID and ('video' in post or 'document' in post):
+        if str(post['chat']['id']) == ADMIN_CHANNEL_ID:
             file = post.get('video') or post.get('document')
-            title, year = parse_movie_name(file.get('file_name', ''))
-            if title and year:
-                info = get_tmdb_info(title, year)
-                if info:
-                    # === পরিবর্তন এখানে: সরাসরি পোস্টের লিঙ্ক তৈরি করা হচ্ছে ===
-                    channel_username_or_id = chat_id.replace("-100", "") # পাবলিক চ্যানেলের জন্য username, প্রাইভেটের জন্য chat_id
-                    message_id = post['message_id']
-                    # নোট: যদি আপনার চ্যানেল প্রাইভেট হয়, এই লিঙ্ক কাজ নাও করতে পারে। সেক্ষেত্রে চ্যানেলটিকে পাবলিক করতে হবে।
-                    # যদি চ্যানেল পাবলিক করতে না চান, তাহলে অন্য সমাধান লাগবে।
-                    # আপাতত ধরে নিচ্ছি চ্যানেল পাবলিক করা সম্ভব। চ্যানেলের একটি ইউজারনেম সেট করুন।
-                    # যেমন, @my_movie_channel. তাহলে নিচের লাইনে channel_username_or_id এর জায়গায় 'my_movie_channel' বসাতে হবে।
+            if file:
+                title, year = parse_movie_name(file.get('file_name', ''))
+                if title and year and movies_collection is not None:
+                    info = get_tmdb_info(title, year)
+                    if info:
+                        info['message_id_in_channel'] = post['message_id']
+                        movies_collection.insert_one(info)
+                        print(f"SUCCESS: Movie '{info['title']}' info saved with message_id.")
+    elif 'message' in data:
+        message = data['message']
+        chat_id = message['chat']['id']
+        text = message.get('text', '')
+        if text == '/start':
+            requests.get(f"{TELEGRAM_API_URL}/sendMessage?chat_id={chat_id}&text=Welcome! Please browse our website to get movies.")
+        elif text.startswith('/start file_'):
+            try:
+                movie_id_str = text.split('_')[1]
+                movie = movies_collection.find_one({'_id': ObjectId(movie_id_str)})
+                if movie and 'message_id_in_channel' in movie:
+                    wait_msg = requests.get(f"{TELEGRAM_API_URL}/sendMessage?chat_id={chat_id}&text=✅ Request received. Please wait while we process your file...").json()
+                    wait_msg_id = wait_msg.get('result', {}).get('message_id')
                     
-                    # চ্যানেল প্রাইভেট হলে এই লিঙ্ক কাজ করবে না। একটি PUBLIC CHANNEL USERNAME দিন, যেমন 'your_channel_name'
-                    # আমি আপাতত একটি placeholder দিচ্ছি, আপনাকে এটি পরিবর্তন করতে হতে পারে।
-                    # আপনার চ্যানেলের একটি ইউজারনেম দিন (যেমন @my_movies), তারপর নিচের লাইনে 'c' এর বদলে সেই ইউজারনেম লিখুন।
-                    info['download_url'] = f"https://t.me/c/{channel_username_or_id}/{message_id}"
+                    copy_payload = {'chat_id': chat_id, 'from_chat_id': ADMIN_CHANNEL_ID, 'message_id': movie['message_id_in_channel']}
+                    res = requests.post(f"{TELEGRAM_API_URL}/copyMessage", json=copy_payload)
                     
-                    movies_collection.insert_one(info)
-                    print(f"SUCCESS: Movie '{info['title']}' added. Link: {info['download_url']}")
+                    if wait_msg_id: requests.get(f"{TELEGRAM_API_URL}/deleteMessage?chat_id={chat_id}&message_id={wait_msg_id}")
+                    
+                    if not res.json().get('ok'):
+                        error_desc = res.json().get('description', 'Unknown error')
+                        print(f"Failed to send file. Error: {error_desc}")
+                        requests.get(f"{TELEGRAM_API_URL}/sendMessage?chat_id={chat_id}&text=Sorry, we couldn't send the file. Reason: {error_desc}")
+                else:
+                    requests.get(f"{TELEGRAM_API_URL}/sendMessage?chat_id={chat_id}&text=Sorry, the file could not be found.")
+            except Exception as e:
+                print(f"CRITICAL ERROR sending file: {e}")
+                requests.get(f"{TELEGRAM_API_URL}/sendMessage?chat_id={chat_id}&text=An unexpected error occurred. Please try again.")
     return jsonify(status='ok')
 
 if __name__ == '__main__':
